@@ -269,10 +269,10 @@ public class RowDataTransformer extends AbstractOtterTransformer<EventData, Even
             boolean canColumnsNotExist = tableHolder.isEnableCompatibleMissColumn();
             if (type == EventType.UPDATE) {
                 // 非变更字段，且当前值为null
-                canColumnsNotExist &= !scolumn.isUpdate() && scolumn.isNull();
+                //canColumnsNotExist &= !scolumn.isUpdate() && scolumn.isNull();
             } else if (type == EventType.INSERT) {
                 // 当前值为null
-                canColumnsNotExist &= scolumn.isNull();
+                //canColumnsNotExist &= scolumn.isNull();
             } else if (type == EventType.DELETE) {
                 canColumnsNotExist &= !scolumn.isKey(); // 主键不允许不存在
             }
