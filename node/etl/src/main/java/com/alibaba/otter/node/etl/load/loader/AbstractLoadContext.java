@@ -38,7 +38,7 @@ public abstract class AbstractLoadContext<T> implements LoadContext, Serializabl
     private Channel           channel;
     private Pipeline          pipeline;
     protected List<T>         prepareDatas;                            // 准备处理的数据
-    protected List<T>         processedDatas;                          // 已处理完成的数据
+    public List<T>            processedDatas;                          // 已处理完成的数据 @modify by rl 2019-4
     protected List<T>         failedDatas;
 
     public AbstractLoadContext(){

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:aop="http://www.springframework.org/schema/aop"
+	   xmlns:context="http://www.springframework.org/schema/context"
+	   xmlns:rabbit="http://www.springframework.org/schema/rabbit"
+	xmlns:tx="http://www.springframework.org/schema/tx"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-2.0.xsd
+	 http://www.springframework.org/schema/tx http://www.springframework.org/schema/tx/spring-tx-2.0.xsd
+	 http://www.springframework.org/schema/aop http://www.springframework.org/schema/aop/spring-aop-2.0.xsd
+	 http://www.springframework.org/schema/rabbit
+	 http://www.springframework.org/schema/rabbit/spring-rabbit-1.3.xsd"
+	default-autowire="byName" default-dependency-check="none">
+
+
+	<rabbit:connection-factory id="connectionFactory"
+							   host="mq.dev.zkh360.com" username="zkhdev"
+							   password="zkhdev" port="5672"
+							   virtual-host="/" channel-cache-size="100" publisher-confirms="true" />
+
+
+	<rabbit:admin connection-factory="connectionFactory" />
+
+	<!-- queue 队列声明 -->
+	<rabbit:queue  durable="true"
+				   auto-delete="false"
+				   name="queue_goods_message" />
+
+	<!-- exchange queue binging key 绑定 -->
+	<rabbit:topic-exchange name="exchange_goods_meaasge"
+						   durable="true"
+						   auto-delete="false">
+		<rabbit:bindings>
+			<rabbit:binding pattern="routing.goods.#"  queue="queue_goods_message" />
+		</rabbit:bindings>
+	</rabbit:topic-exchange>
+
+	<!-- spring template声明 -->
+	<!--<bean id="rabbitTemplate" class="org.springframework.amqp.rabbit.core.RabbitTemplate">
+		<constructor-arg ref="connectionFactory"></constructor-arg>
+	</bean>-->
+	<bean id="confirmCallBackListener" class="com.alibaba.otter.node.etl.common.Utils.GoodsConfirmListener"/>
+	<bean id="jackson2JsonMessageConverter" class="org.springframework.amqp.support.converter.Jackson2JsonMessageConverter"/>
+	<rabbit:template id="rabbitTemplate" connection-factory="connectionFactory"
+					 exchange="exchange_goods_meaasge" queue="queue_goods_message" routing-key="routing.goods.#"  mandatory="true" confirm-callback="confirmCallBackListener" message-converter="jackson2JsonMessageConverter"/>
+
+</beans>

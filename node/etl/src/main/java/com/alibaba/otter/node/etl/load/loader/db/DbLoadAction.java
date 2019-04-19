@@ -16,45 +16,9 @@
 
 package com.alibaba.otter.node.etl.load.loader.db;
 
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.sql.Types;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-
-import org.apache.commons.lang.StringUtils;
-import org.apache.commons.lang.exception.ExceptionUtils;
-import org.apache.ddlutils.model.Column;
-import org.apache.ddlutils.model.Table;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.dao.DataAccessException;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.DeadlockLoserDataAccessException;
-import org.springframework.jdbc.core.BatchPreparedStatementSetter;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.PreparedStatementSetter;
-import org.springframework.jdbc.core.StatementCallback;
-import org.springframework.jdbc.core.StatementCreatorUtils;
-import org.springframework.jdbc.support.lob.LobCreator;
-import org.springframework.transaction.TransactionStatus;
-import org.springframework.transaction.support.TransactionCallback;
-import org.springframework.util.Assert;
-import org.springframework.util.CollectionUtils;
-
 import com.alibaba.otter.node.common.config.ConfigClientService;
+import com.alibaba.otter.node.etl.common.Utils.MqProceducer;
+import com.alibaba.otter.node.etl.common.config.GoodsConfig;
 import com.alibaba.otter.node.etl.common.db.dialect.DbDialect;
 import com.alibaba.otter.node.etl.common.db.dialect.DbDialectFactory;
 import com.alibaba.otter.node.etl.common.db.dialect.mysql.MysqlDialect;
@@ -75,34 +39,55 @@ import com.alibaba.otter.shared.common.model.config.data.DataMediaPair;
 import com.alibaba.otter.shared.common.model.config.data.db.DbMediaSource;
 import com.alibaba.otter.shared.common.model.config.pipeline.Pipeline;
 import com.alibaba.otter.shared.common.utils.thread.NamedThreadFactory;
-import com.alibaba.otter.shared.etl.model.EventColumn;
-import com.alibaba.otter.shared.etl.model.EventData;
-import com.alibaba.otter.shared.etl.model.EventType;
-import com.alibaba.otter.shared.etl.model.Identity;
-import com.alibaba.otter.shared.etl.model.RowBatch;
+import com.alibaba.otter.shared.etl.model.*;
+import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang.exception.ExceptionUtils;
+import org.apache.ddlutils.model.Column;
+import org.apache.ddlutils.model.Table;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DeadlockLoserDataAccessException;
+import org.springframework.jdbc.core.*;
+import org.springframework.jdbc.support.lob.LobCreator;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.util.Assert;
+
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Types;
+import java.util.*;
+import java.util.concurrent.*;
 
 /**
  * 数据库load的执行入口
- * 
+ *
  * @author jianghang 2011-10-31 下午03:17:43
  * @version 4.0.0
  */
 public class DbLoadAction implements InitializingBean, DisposableBean {
 
-    private static final Logger logger             = LoggerFactory.getLogger(DbLoadAction.class);
-    private static final String WORKER_NAME        = "DbLoadAction";
+    private static final Logger logger = LoggerFactory.getLogger(DbLoadAction.class);
+    private static final String WORKER_NAME = "DbLoadAction";
     private static final String WORKER_NAME_FORMAT = "pipelineId = %s , pipelineName = %s , " + WORKER_NAME;
-    private static final int    DEFAULT_POOL_SIZE  = 5;
-    private int                 poolSize           = DEFAULT_POOL_SIZE;
-    private int                 retry              = 3;
-    private int                 retryWait          = 3000;
-    private LoadInterceptor     interceptor;
-    private ExecutorService     executor;
-    private DbDialectFactory    dbDialectFactory;
+    private static final int DEFAULT_POOL_SIZE = 5;
+    private int poolSize = DEFAULT_POOL_SIZE;
+    private int retry = 3;
+    private int retryWait = 3000;
+    private LoadInterceptor interceptor;
+    private ExecutorService executor;
+    private DbDialectFactory dbDialectFactory;
     private ConfigClientService configClientService;
-    private int                 batchSize          = 50;
-    private boolean             useBatch           = true;
-    private LoadStatsTracker    loadStatsTracker;
+    private int batchSize = 50;
+    private boolean useBatch = true;
+    private LoadStatsTracker loadStatsTracker;
+    public static ExecutorService executorService = Executors.newCachedThreadPool();
 
     /**
      * 返回结果为已处理成功的记录
@@ -110,7 +95,7 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
     public DbLoadContext load(RowBatch rowBatch, WeightController controller) {
         Assert.notNull(rowBatch);
         Identity identity = rowBatch.getIdentity();
-        DbLoadContext context = buildContext(identity);
+        final DbLoadContext context = buildContext(identity);
 
         try {
             List<EventData> datas = rowBatch.getDatas();
@@ -125,7 +110,7 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
             // 因为所有的数据在DbBatchLoader已按照DateMediaSource进行归好类，不同数据源介质会有不同的DbLoadAction进行处理
             // 设置media source时，只需要取第一节点的source即可
             context.setDataMediaSource(ConfigHelper.findDataMedia(context.getPipeline(), datas.get(0).getTableId())
-                .getSource());
+                    .getSource());
             interceptor.prepare(context);
             // 执行重复录入数据过滤
             datas = context.getPrepareDatas();
@@ -171,8 +156,41 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
             interceptor.error(context);
             throw new LoadException(e);
         }
-
+        goods_change_hanler(context);
         return context;// 返回处理成功的记录
+    }
+
+    //@auth liang.ren@zkh360.com @Date 2019-4 async,handler goods attr change,storage table change msg to rabbitmq
+    private void goods_change_hanler(final DbLoadContext context) {
+        this.executorService.submit(new Runnable() {
+            @Override
+            public void run() {
+                //取otter同步完成的数据,发送消息给mq
+                Thread.currentThread().setName("goods_table_change_mq_thread");
+                List<Map<String, String>> mq_messages = new ArrayList<Map<String, String>>();
+                List<String> goods_table = Arrays.asList(GoodsConfig.GOODS_INFLUENCE_TABLE_NAMES.split(","));
+                for (EventData eventData : context.processedDatas) {
+                    boolean is_goods_table = goods_table.contains(eventData.getTableName());
+                    if(!is_goods_table){
+                        continue;
+                    }
+                    EventType eventType = eventData.getEventType();
+                    Map<String, String> message_mq = new HashMap<String, String>();
+                    List<EventColumn> keys = eventData.getKeys();
+                    boolean is_handler_type = (eventType.equals(EventType.INSERT) || eventType.equals(EventType.UPDATE) || eventType.equals(EventType.DELETE)) && CollectionUtils.isNotEmpty(keys) ? true : false;
+                    if (is_handler_type) {
+                        message_mq.put(GoodsConfig.GOODS_MQ_TABLE_NAME, eventData.getTableName());
+                        message_mq.put(GoodsConfig.GOODS_MQ_TABLE_ID, keys.get(0).getColumnValue());
+                        message_mq.put(GoodsConfig.GOODS_MQ_TABLE_OPER_TYPE, eventData.getEventType().getValue());
+                        message_mq.put(GoodsConfig.GOODS_MQ_TABLE_CREATE_TIME,String.valueOf(System.currentTimeMillis()));
+                        mq_messages.add(message_mq);
+                    }
+                }
+                if(CollectionUtils.isNotEmpty(mq_messages)){
+                    MqProceducer.sendMessage(mq_messages);
+                }
+            }
+        });
     }
 
     private DbLoadContext buildContext(Identity identity) {
@@ -187,7 +205,7 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
 
     /**
      * 分析整个数据，将datas划分为多个批次. ddl sql前的DML并发执行，然后串行执行ddl后，再并发执行DML
-     * 
+     *
      * @return
      */
     private boolean isDdlDatas(List<EventData> eventDatas) {
@@ -196,7 +214,7 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
             result |= eventData.getEventType().isDdl();
             if (result && !eventData.getEventType().isDdl()) {
                 throw new LoadException("ddl/dml can't be in one batch, it's may be a bug , pls submit issues.",
-                    DbLoadDumper.dumpEventDatas(eventDatas));
+                        DbLoadDumper.dumpEventDatas(eventDatas));
             }
         }
 
@@ -343,7 +361,7 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
 
     /**
      * 执行ddl的调用，处理逻辑比较简单: 串行调用
-     * 
+     *
      * @param context
      * @param eventDatas
      */
@@ -351,7 +369,7 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
         for (final EventData data : eventDatas) {
             DataMedia dataMedia = ConfigHelper.findDataMedia(context.getPipeline(), data.getTableId());
             final DbDialect dbDialect = dbDialectFactory.getDbDialect(context.getIdentity().getPipelineId(),
-                (DbMediaSource) dataMedia.getSource());
+                    (DbMediaSource) dataMedia.getSource());
             Boolean skipDdlException = context.getPipeline().getParameters().getSkipDdlException();
             try {
                 Boolean result = dbDialect.getJdbcTemplate().execute(new StatementCallback<Boolean>() {
@@ -445,14 +463,14 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
                         if (ex != null) {
                             // do skip
                             logger.warn("skip exception for data : {} , caused by {}",
-                                retryEventData,
-                                ExceptionUtils.getFullStackTrace(ex));
+                                    retryEventData,
+                                    ExceptionUtils.getFullStackTrace(ex));
                         }
                     } catch (Exception ex) {
                         // do skip
                         logger.warn("skip exception for data : {} , caused by {}",
-                            retryEventData,
-                            ExceptionUtils.getFullStackTrace(ex));
+                                retryEventData,
+                                ExceptionUtils.getFullStackTrace(ex));
                     }
                 }
             } else {
@@ -498,12 +516,12 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
 
     public void afterPropertiesSet() throws Exception {
         executor = new ThreadPoolExecutor(poolSize,
-            poolSize,
-            0L,
-            TimeUnit.MILLISECONDS,
-            new ArrayBlockingQueue(poolSize * 4),
-            new NamedThreadFactory(WORKER_NAME),
-            new ThreadPoolExecutor.CallerRunsPolicy());
+                poolSize,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue(poolSize * 4),
+                new NamedThreadFactory(WORKER_NAME),
+                new ThreadPoolExecutor.CallerRunsPolicy());
     }
 
     public void destroy() throws Exception {
@@ -516,16 +534,16 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
 
     class DbLoadWorker implements Callable<Exception> {
 
-        private DbLoadContext   context;
-        private DbDialect       dbDialect;
+        private DbLoadContext context;
+        private DbDialect dbDialect;
         private List<EventData> datas;
-        private boolean         canBatch;
-        private List<EventData> allFailedDatas   = new ArrayList<EventData>();
+        private boolean canBatch;
+        private List<EventData> allFailedDatas = new ArrayList<EventData>();
         private List<EventData> allProcesedDatas = new ArrayList<EventData>();
-        private List<EventData> processedDatas   = new ArrayList<EventData>();
-        private List<EventData> failedDatas      = new ArrayList<EventData>();
+        private List<EventData> processedDatas = new ArrayList<EventData>();
+        private List<EventData> failedDatas = new ArrayList<EventData>();
 
-        public DbLoadWorker(DbLoadContext context, List<EventData> datas, boolean canBatch){
+        public DbLoadWorker(DbLoadContext context, List<EventData> datas, boolean canBatch) {
             this.context = context;
             this.datas = datas;
             this.canBatch = canBatch;
@@ -533,15 +551,15 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
             EventData data = datas.get(0); // eventData为同一数据库的记录，只取第一条即可
             DataMedia dataMedia = ConfigHelper.findDataMedia(context.getPipeline(), data.getTableId());
             dbDialect = dbDialectFactory.getDbDialect(context.getIdentity().getPipelineId(),
-                (DbMediaSource) dataMedia.getSource());
+                    (DbMediaSource) dataMedia.getSource());
 
         }
 
         public Exception call() throws Exception {
             try {
                 Thread.currentThread().setName(String.format(WORKER_NAME_FORMAT,
-                    context.getPipeline().getId(),
-                    context.getPipeline().getName()));
+                        context.getPipeline().getId(),
+                        context.getPipeline().getName()));
                 return doCall();
             } finally {
                 Thread.currentThread().setName(WORKER_NAME);
@@ -552,7 +570,7 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
             RuntimeException error = null;
             ExecuteResult exeResult = null;
             int index = 0;// 记录下处理成功的记录下标
-            for (; index < datas.size();) {
+            for (; index < datas.size(); ) {
                 // 处理数据切分
                 final List<EventData> splitDatas = new ArrayList<EventData>();
                 if (useBatch && canBatch) {
@@ -643,11 +661,11 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
                         exeResult = ExecuteResult.SUCCESS;
                     } catch (DeadlockLoserDataAccessException ex) {
                         error = new LoadException(ExceptionUtils.getFullStackTrace(ex),
-                            DbLoadDumper.dumpEventDatas(splitDatas));
+                                DbLoadDumper.dumpEventDatas(splitDatas));
                         exeResult = ExecuteResult.RETRY;
                     } catch (DataIntegrityViolationException ex) {
                         error = new LoadException(ExceptionUtils.getFullStackTrace(ex),
-                            DbLoadDumper.dumpEventDatas(splitDatas));
+                                DbLoadDumper.dumpEventDatas(splitDatas));
                         // if (StringUtils.contains(ex.getMessage(),
                         // "ORA-00001")) {
                         // exeResult = ExecuteResult.RETRY;
@@ -657,11 +675,11 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
                         exeResult = ExecuteResult.ERROR;
                     } catch (RuntimeException ex) {
                         error = new LoadException(ExceptionUtils.getFullStackTrace(ex),
-                            DbLoadDumper.dumpEventDatas(splitDatas));
+                                DbLoadDumper.dumpEventDatas(splitDatas));
                         exeResult = ExecuteResult.ERROR;
                     } catch (Throwable ex) {
                         error = new LoadException(ExceptionUtils.getFullStackTrace(ex),
-                            DbLoadDumper.dumpEventDatas(splitDatas));
+                                DbLoadDumper.dumpEventDatas(splitDatas));
                         exeResult = ExecuteResult.ERROR;
                     }
 
@@ -680,8 +698,8 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
                         if (retryCount >= retry) {
                             processFailedDatas(index);// 重试已结束，添加出错记录并退出
                             throw new LoadException(String.format("execute [%s] retry %s times failed",
-                                context.getIdentity().toString(),
-                                retryCount), error);
+                                    context.getIdentity().toString(),
+                                    retryCount), error);
                         } else {
                             try {
                                 int wait = retryCount * retryWait;
@@ -758,22 +776,22 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
                     isRequired = isRequiredMap.get(StringUtils.lowerCase(column.getColumnName()));
                     if (isRequired == null) {
                         throw new LoadException(String.format("column name %s is not found in Table[%s]",
-                            column.getColumnName(),
-                            table.toString()));
+                                column.getColumnName(),
+                                table.toString()));
                     }
                 }
 
                 Object param = null;
                 if (dbDialect instanceof MysqlDialect
-                    && (sqlType == Types.TIME || sqlType == Types.TIMESTAMP || sqlType == Types.DATE)) {
+                        && (sqlType == Types.TIME || sqlType == Types.TIMESTAMP || sqlType == Types.DATE)) {
                     // 解决mysql的0000-00-00 00:00:00问题，直接依赖mysql
                     // driver进行处理，如果转化为Timestamp会出错
                     param = column.getColumnValue();
                 } else {
                     param = SqlUtils.stringToSqlValue(column.getColumnValue(),
-                        sqlType,
-                        isRequired,
-                        dbDialect.isEmptyStringNulled());
+                            sqlType,
+                            isRequired,
+                            dbDialect.isEmptyStringNulled());
                 }
 
                 try {
@@ -812,7 +830,7 @@ public class DbLoadAction implements InitializingBean, DisposableBean {
                     }
                 } catch (SQLException ex) {
                     logger.error("## SetParam error , [pairId={}, sqltype={}, value={}]",
-                        new Object[] { data.getPairId(), sqlType, param });
+                            new Object[]{data.getPairId(), sqlType, param});
                     throw ex;
                 }
             }

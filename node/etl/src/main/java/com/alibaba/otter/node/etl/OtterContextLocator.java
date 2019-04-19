@@ -16,12 +16,14 @@
 
 package com.alibaba.otter.node.etl;
 
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.support.ClassPathXmlApplicationContext;
 
 import com.alibaba.otter.shared.common.model.config.ConfigException;
+import org.springframework.data.redis.core.RedisTemplate;
 
 /**
  * Comment of OtterServiceLocator
@@ -63,6 +65,14 @@ public class OtterContextLocator {
 
     public static OtterController getOtterController() {
         return (OtterController) getApplicationContext().getBean("otterController");
+    }
+
+    public static RabbitTemplate getRabbitTemplate() {
+        return (RabbitTemplate) getApplicationContext().getBean("rabbitTemplate");
+    }
+
+    public static RedisTemplate getRedisTemplate() {
+        return (RedisTemplate<String, Object>) getApplicationContext().getBean("redisTemplate");
     }
 
     public static <T> T getBean(String name) {

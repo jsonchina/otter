@@ -13,6 +13,17 @@
 	<url>http://github.com/alibaba/otter</url>
 	<dependencies>
 		<dependency>
+			<groupId>org.testng</groupId>
+			<artifactId>testng</artifactId>
+			<version>6.11</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>mockit</groupId>
+			<artifactId>jmockit</artifactId>
+			<version>0.999.10</version>
+		</dependency>
+		<dependency>
 			<groupId>com.alibaba.otter</groupId>
 			<artifactId>shared.common</artifactId>
 			<version>${project.version}</version>
